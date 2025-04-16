@@ -1,0 +1,7 @@
+pyaudio
+wave
+keyboard
+time
+os
+openai-whisper
+requests
