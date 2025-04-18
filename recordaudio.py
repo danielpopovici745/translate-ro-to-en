@@ -4,7 +4,7 @@ import keyboard
 import time
 import os
 import whisper
-import requests
+import lmstudio as lms
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
@@ -59,36 +59,15 @@ def transcribe(filePath):
     return None 
 
 def translate(text):
-  try:
-    headers = {"Content-Type": "application/json"}
-    payload = {
-      "model": "gemma-3-12b-it",
-      "messages": [
-        {"role": "system", "content": "You are a professional Romanian to English translator. Only translate the words, nothing more."},
-        {"role": "user", "content": text}  # User's prompt
-      ],
-      "temperature":0.1,
-      "stream": False
-    }
+  model = lms.llm()
+  for fragment in model.respond_stream("Translate the Romanian to English. Don't say anything more." + text):  
+      print(fragment.content, end="", flush=True)  
+  print()
 
-    response = requests.post(f"http://127.0.0.1:1234/v1/chat/completions", headers=headers, json=payload)
-    response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-
-    translation = response.json()["choices"][0]["message"]["content"]  # Extract the translation from the JSON response
-    return translation
-
-  except requests.exceptions.RequestException as e:
-        print(f"Error translating with LM Studio: {e}")
-        return None
-  except (KeyError, IndexError) as e:
-      print(f"Error parsing LM Studio response: {e}.  Check the model and endpoint.")
-      return None
 
 recorded_file = record_audio()
 if recorded_file:
     transcription = transcribe(recorded_file)
     if transcription:
-      print("Transcription:"+ transcription)
-      translation = translate(transcription)
-      if translation:
-         print("Translation: " + translation)
+      print("Transcription:"+ transcription, end="\n \n")
+      translate(transcription)  
