@@ -5,13 +5,14 @@ import queue
 import time
 import numpy as np  # Import NumPy
 import lmstudio as lms
+import os
 
 
 def transcribe_live(audio_queue, model):
     """Transcribes audio chunks from the queue using Whisper."""
     try:
         while True:
-            data, timestamp = audio_queue.get()  # Wait for data to be available
+            data= audio_queue.get()  # Wait for data to be available
             if data is None:  # Signal to stop transcription
                 break
 
@@ -21,32 +22,27 @@ def transcribe_live(audio_queue, model):
 
             result = model.transcribe(audio=audio_float, fp16=False, language="ro") #fp16=False avoids CUDA issues on some systems
             text = result["text"]
-            print(f"{text}",end="\n")  # Print with timestamp
+            print(f"\n{text}",end="\n\n")
             translate(text)
+            terminal_width = os.get_terminal_size().columns
+            print('_' * terminal_width)
     except Exception as e:
         print(f"Transcription error: {e}")
 
 
-def record_audio(audio_queue, duration=4):
+def record_audio(audio_queue, duration=5):
     """Records audio from the microphone and puts it into the queue."""
+    RATE=16000
+
     try:
         p = pyaudio.PyAudio()
-        stream = p.open(format=pyaudio.paInt16,
-                         channels=1,
-                         rate=16000,  # Whisper requires 16kHz - HARDCODED VALUE
-                         input=True)
+        stream = p.open(format=pyaudio.paInt16,channels=1,rate=RATE,input=True)
 
         print("Recording...")
-        start_time = time.time()
-
 
         while True:
-            data = stream.read(int(duration * 16000))  # Read a chunk of audio
-            timestamp = time.time() - start_time #Corrected timestamp calculation
-            audio_queue.put((data, timestamp))
-
-
-
+            data = stream.read(int(duration * RATE))  # Read a chunk of audio
+            audio_queue.put((data))
     except Exception as e:
         print(f"Recording error: {e}")
     finally:

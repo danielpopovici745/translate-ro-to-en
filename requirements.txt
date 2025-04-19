@@ -1,4 +1,7 @@
 pyaudio
-keyboard
 openai-whisper
-requests
+threading
+queue
+numpy
+lmstudio
+os
