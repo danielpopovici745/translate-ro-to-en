@@ -8,7 +8,7 @@ import lmstudio as lms
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 44100
+RATE = 16000
 CHUNK = 1024
 OUTPUT_FILENAME = "recordedFile.wav"
 
@@ -60,7 +60,7 @@ def transcribe(filePath):
 
 def translate(text):
   model = lms.llm()
-  for fragment in model.respond_stream("Translate the Romanian to English. Don't say anything more." + text):  
+  for fragment in model.respond_stream("You are a professional translator. Translate the following Romanian text to English accurately and naturally. Don't say anything more. If there is nothing to translate or you can't translate don't say anything. No swear words." + text):  
       print(fragment.content, end="", flush=True)  
   print()
 
