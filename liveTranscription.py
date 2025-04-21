@@ -28,8 +28,6 @@ def transcribe_live(audio_queue, model, translator_model):
                 translated_text = translate(text, translator_model)
                 if translated_text:
                     print(f"Translated: {translated_text}\n")
-                else:
-                    print("No translation available.\n")
 
             # Print a separator line
             terminal_width = os.get_terminal_size().columns
@@ -66,18 +64,10 @@ def record_audio(audio_queue, duration=5):
 
 def translate(text, model):
     """Translates Romanian text to English using the lmstudio model."""
-    try:
-        prompt = (
-            "You are a professional translator. Translate the following Romanian text to English accurately and naturally. "
-            "Don't say anything more. If there is nothing to translate or you can't translate, don't say anything."
-        )
-        response = ""
-        for fragment in model.respond_stream(prompt + text):
-            response += fragment.content
-        return response.strip()
-    except Exception as e:
-        print(f"Translation error: {e}")
-        return None
+
+    for fragment in model.respond_stream("You are a professional translator. Translate the following Romanian text to English accurately and naturally. Don't say anything more. If there is nothing to translate or you can't translate don't say anything." + text): 
+      print(fragment.content, end="", flush=True)
+    print()
 
 
 def main():
