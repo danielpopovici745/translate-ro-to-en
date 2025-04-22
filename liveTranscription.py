@@ -1,45 +1,59 @@
 import pyaudio
 import whisper
-import threading
 import queue
 import time
 import numpy as np
 import lmstudio as lms
-import os
 import pyttsx3
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 
-def transcribe_live(audio_queue, model, translator_model):
-    """Transcribes audio chunks from the queue using Whisper and translates them."""
+def transcribe_live(audio_queue, model, translator_model, translation_queue):
+    """Transcribes audio chunks from the queue using Whisper and sends text to the translation queue."""
     try:
+        batch = []
+        batch_size = 5  # Number of chunks to batch process
         while True:
-            data = audio_queue.get()  # Wait for data to be available
+            data = audio_queue.get()
             if data is None:  # Signal to stop transcription
                 break
 
-            # Convert bytes to NumPy array and normalize to float32
-            audio_np = np.frombuffer(data, dtype=np.int16)
-            audio_float = audio_np.astype(np.float32) / 32768.0
+            batch.append(data)
+            if len(batch) >= batch_size:
+                # Process the batch
+                audio_np = np.concatenate([np.frombuffer(chunk, dtype=np.int16) for chunk in batch])
+                audio_float = audio_np.astype(np.float32) / 32768.0
 
-            # Transcribe audio
+                # Transcribe audio
+                start_time = time.time()
+                result = model.transcribe(audio=audio_float, fp16=False, language="ro")
+                text = result.get("text", "").strip()
+                if text:
+                    print(f"\nTranscribed: {text}\n")
+                    print(f"Transcription time: {time.time() - start_time:.2f} seconds")
+                    translation_queue.put(text)  # Send text to translation queue
+
+                batch = []  # Clear the batch
+
+        # Process any remaining audio in the batch
+        if batch:
+            audio_np = np.concatenate([np.frombuffer(chunk, dtype=np.int16) for chunk in batch])
+            audio_float = audio_np.astype(np.float32) / 32768.0
             result = model.transcribe(audio=audio_float, fp16=False, language="ro")
             text = result.get("text", "").strip()
             if text:
                 print(f"\nTranscribed: {text}\n")
-                translated_text = translate(text, translator_model)
-                if translated_text:
-                    print(f"Translated: {translated_text}\n")
+                translation_queue.put(text)
 
-            # Print a separator line
-            terminal_width = os.get_terminal_size().columns
-            print('_' * terminal_width)
     except Exception as e:
         print(f"Transcription error: {e}")
 
 
-def record_audio(audio_queue, duration=5):
+def record_audio(audio_queue, duration=1.0):
     """Records audio from the microphone and puts it into the queue."""
     RATE = 16000
+    CHUNK = int(duration * RATE)
 
     try:
         p = pyaudio.PyAudio()
@@ -48,7 +62,7 @@ def record_audio(audio_queue, duration=5):
         print("Recording...")
 
         while True:
-            data = stream.read(int(duration * RATE), exception_on_overflow=False)  # Read a chunk of audio
+            data = stream.read(CHUNK, exception_on_overflow=False)
             audio_queue.put(data)
     except Exception as e:
         print(f"Recording error: {e}")
@@ -64,35 +78,49 @@ def record_audio(audio_queue, duration=5):
 
 
 def translate(text, model):
-    """Translates Romanian text to English using the lmstudio model and plays the translation."""
+    """Translates Romanian text to English using the lmstudio model."""
     translated_text = ""
     for fragment in model.respond_stream(
         "You are a professional translator. Translate the following Romanian text to English accurately and naturally. Don't say anything more. If there is nothing to translate or you can't translate don't say anything." + text
-    ): 
-        print(fragment.content, end="", flush=True)
+    ):
         translated_text += fragment.content
-    print()
+    return translated_text
 
-    tts(translated_text)
 
-def tts(text):
-    """Convert text to speech using pyttsx3."""
-    try:
-        # Initialize the TTS engine
-        engine = pyttsx3.init()
+def translation_worker(translation_queue, translator_model, tts_queue):
+    """Worker function to translate text asynchronously and send it to the TTS queue."""
+    while True:
+        text = translation_queue.get()
+        if text is None:  # Signal to stop translation
+            break
+        try:
+            translated_text = translate(text, translator_model)
+            if translated_text:
+                print(f"Translated: {translated_text}\n")
+                tts_queue.put(translated_text)  # Send to TTS queue
+        except Exception as e:
+            print(f"Translation error: {e}")
 
-        # Set properties before adding anything to speak
-        engine.setProperty('rate', 200)  # Speed (default is ~200)
-        engine.setProperty('volume', 0.8)  # Volume (0.0 to 1.0)
 
-        # Speak the text
-        engine.say(text)
-        engine.runAndWait()
-    except Exception as e:
-        print(f"Error in TTS: {e}")
+def tts_worker(tts_queue):
+    """Worker function for TTS to process translations asynchronously."""
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 200)
+    engine.setProperty('volume', 0.8)
+
+    while True:
+        text = tts_queue.get()
+        if text is None:  # Signal to stop TTS
+            break
+        try:
+            engine.say(text)
+            engine.runAndWait()
+        except Exception as e:
+            print(f"Error in TTS: {e}")
+
 
 def main():
-    """Main function to orchestrate recording, transcription, and translation."""
+    """Main function to orchestrate recording, transcription, translation, and TTS."""
     try:
         # Load models
         print("Loading Whisper model...")
@@ -100,31 +128,27 @@ def main():
         print("Loading translation model...")
         translator_model = lms.llm()
 
-        # Create a queue for audio data
+        # Create queues for audio, translation, and TTS
         audio_queue = queue.Queue()
+        translation_queue = queue.Queue()
+        tts_queue = queue.Queue()
 
-        # Start the transcription thread
-        transcription_thread = threading.Thread(
-            target=transcribe_live, args=(audio_queue, transcription_model, translator_model)
-        )
-        transcription_thread.daemon = True
-        transcription_thread.start()
+        # Use ThreadPoolExecutor to manage threads
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            executor.submit(record_audio, audio_queue)
+            executor.submit(transcribe_live, audio_queue, transcription_model, translator_model, translation_queue)
+            executor.submit(translation_worker, translation_queue, translator_model, tts_queue)
+            executor.submit(tts_worker, tts_queue)
 
-        # Start the recording thread
-        recording_thread = threading.Thread(target=record_audio, args=(audio_queue,))
-        recording_thread.daemon = True
-        recording_thread.start()
-
-        # Keep the main thread running
-        print("Press Ctrl+C to stop.")
-        while True:
-            time.sleep(1)
+            print("Press Ctrl+C to stop.")
+            while True:
+                time.sleep(1)
     except KeyboardInterrupt:
         print("\nInterrupted by user. Exiting...")
     finally:
         # Ensure threads exit gracefully
         audio_queue.put(None)  # Signal the transcription thread to stop
-        transcription_thread.join()
-        print("Transcription thread stopped.")
+        translation_queue.put(None)  # Signal the translation thread to stop
+        tts_queue.put(None)  # Signal the TTS thread to stop
 
 main()
