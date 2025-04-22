@@ -1,7 +1,6 @@
 pyaudio
 openai-whisper
-threading
 queue
 numpy
 lmstudio
-os
+pyttsx3

@@ -5,7 +5,6 @@ import time
 import numpy as np
 import lmstudio as lms
 import pyttsx3
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -26,12 +25,10 @@ def transcribe_live(audio_queue, model, translator_model, translation_queue):
                 audio_float = audio_np.astype(np.float32) / 32768.0
 
                 # Transcribe audio
-                start_time = time.time()
                 result = model.transcribe(audio=audio_float, fp16=False, language="ro")
                 text = result.get("text", "").strip()
                 if text:
                     print(f"\nTranscribed: {text}\n")
-                    print(f"Transcription time: {time.time() - start_time:.2f} seconds")
                     translation_queue.put(text)  # Send text to translation queue
 
                 batch = []  # Clear the batch
