@@ -4,8 +4,10 @@ import queue
 import time
 import numpy as np
 import lmstudio as lms
-import pyttsx3
+import os
+import pygame
 from concurrent.futures import ThreadPoolExecutor
+from google.cloud import texttospeech
 
 
 def transcribe_live(audio_queue, model, translator_model, translation_queue):
@@ -47,7 +49,7 @@ def transcribe_live(audio_queue, model, translator_model, translation_queue):
         print(f"Transcription error: {e}")
 
 
-def record_audio(audio_queue, duration=1.0):
+def record_audio(audio_queue, duration=2.0):
     """Records audio from the microphone and puts it into the queue."""
     RATE = 16000
     CHUNK = int(duration * RATE)
@@ -100,18 +102,54 @@ def translation_worker(translation_queue, translator_model, tts_queue):
 
 
 def tts_worker(tts_queue):
-    """Worker function for TTS to process translations asynchronously."""
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 200)
-    engine.setProperty('volume', 0.8)
+    """Worker function for TTS to process translations asynchronously using Google Cloud Text-to-Speech."""
+    client = texttospeech.TextToSpeechClient()
 
     while True:
         text = tts_queue.get()
         if text is None:  # Signal to stop TTS
             break
         try:
-            engine.say(text)
-            engine.runAndWait()
+            # Set up the input text
+            synthesis_input = texttospeech.SynthesisInput(text=text)
+
+            # Configure the voice request
+            voice = texttospeech.VoiceSelectionParams(
+                language_code="en-US",
+                name="en-US-Standard-D",  # Specify the desired voice
+                ssml_gender=texttospeech.SsmlVoiceGender.MALE
+            )
+
+            # Configure the audio output
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.LINEAR16  # Use WAV format
+            )
+
+            # Perform the text-to-speech request
+            response = client.synthesize_speech(
+                input=synthesis_input, voice=voice, audio_config=audio_config
+            )
+
+            # Save the audio to a file
+            temp_audio_file = os.path.join(os.getcwd(), "temp_audio.wav")
+            with open(temp_audio_file, "wb") as out:
+                out.write(response.audio_content)
+
+            # Play the audio using pygame
+            pygame.mixer.init()
+            pygame.mixer.music.load(temp_audio_file)
+            pygame.mixer.music.play()
+
+            # Wait for the audio to finish playing
+            while pygame.mixer.music.get_busy():
+                pygame.time.Clock().tick(10)
+
+            # Stop the mixer and clean up
+            pygame.mixer.music.stop()
+            pygame.mixer.quit()
+
+            # Remove the temporary audio file
+            os.remove(temp_audio_file)
         except Exception as e:
             print(f"Error in TTS: {e}")
 
