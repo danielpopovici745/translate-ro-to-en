@@ -10,6 +10,13 @@ from google.cloud import texttospeech
 from faster_whisper import WhisperModel  # Import faster-whisper
 
 
+def is_silent(audio_chunk, threshold=40):
+    """Determines if the audio chunk is silent based on its energy."""
+    audio_np = np.frombuffer(audio_chunk, dtype=np.int16)
+    energy = np.sqrt(np.mean(audio_np**2))
+    return energy < threshold
+
+
 def transcribe_live(audio_queue, model, translator_model, translation_queue):
     """Transcribes audio chunks from the queue using faster-whisper and sends text to the translation queue."""
     try:
@@ -19,6 +26,10 @@ def transcribe_live(audio_queue, model, translator_model, translation_queue):
             data = audio_queue.get()
             if data is None:  # Signal to stop transcription
                 break
+
+            # Skip silent chunks
+            if is_silent(data):
+                continue
 
             batch.append(data)
             if len(batch) >= batch_size:
