@@ -6,6 +6,7 @@ import time
 import numpy as np
 import lmstudio as lms
 import os
+import pyttsx3
 
 
 def transcribe_live(audio_queue, model, translator_model):
@@ -63,12 +64,32 @@ def record_audio(audio_queue, duration=5):
 
 
 def translate(text, model):
-    """Translates Romanian text to English using the lmstudio model."""
-
-    for fragment in model.respond_stream("You are a professional translator. Translate the following Romanian text to English accurately and naturally. Don't say anything more. If there is nothing to translate or you can't translate don't say anything." + text): 
-      print(fragment.content, end="", flush=True)
+    """Translates Romanian text to English using the lmstudio model and plays the translation."""
+    translated_text = ""
+    for fragment in model.respond_stream(
+        "You are a professional translator. Translate the following Romanian text to English accurately and naturally. Don't say anything more. If there is nothing to translate or you can't translate don't say anything." + text
+    ): 
+        print(fragment.content, end="", flush=True)
+        translated_text += fragment.content
     print()
 
+    tts(translated_text)
+
+def tts(text):
+    """Convert text to speech using pyttsx3."""
+    try:
+        # Initialize the TTS engine
+        engine = pyttsx3.init()
+
+        # Set properties before adding anything to speak
+        engine.setProperty('rate', 200)  # Speed (default is ~200)
+        engine.setProperty('volume', 0.8)  # Volume (0.0 to 1.0)
+
+        # Speak the text
+        engine.say(text)
+        engine.runAndWait()
+    except Exception as e:
+        print(f"Error in TTS: {e}")
 
 def main():
     """Main function to orchestrate recording, transcription, and translation."""
