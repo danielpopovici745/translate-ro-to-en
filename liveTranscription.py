@@ -1,5 +1,4 @@
 import pyaudio
-import whisper
 import queue
 import time
 import numpy as np
@@ -8,10 +7,11 @@ import os
 import pygame
 from concurrent.futures import ThreadPoolExecutor
 from google.cloud import texttospeech
+from faster_whisper import WhisperModel  # Import faster-whisper
 
 
 def transcribe_live(audio_queue, model, translator_model, translation_queue):
-    """Transcribes audio chunks from the queue using Whisper and sends text to the translation queue."""
+    """Transcribes audio chunks from the queue using faster-whisper and sends text to the translation queue."""
     try:
         batch = []
         batch_size = 5  # Number of chunks to batch process
@@ -27,9 +27,12 @@ def transcribe_live(audio_queue, model, translator_model, translation_queue):
                 audio_float = audio_np.astype(np.float32) / 32768.0
 
                 # Transcribe audio
-                result = model.transcribe(audio=audio_float, fp16=False, language="ro")
-                text = result.get("text", "").strip()
+                start_time = time.time()
+                segments, _ = model.transcribe(audio=audio_float, language="ro")
+                
+                text = " ".join(segment.text.strip() for segment in segments)
                 if text:
+                    print(f"Transcription time: {time.time() - start_time:.2f} seconds")
                     print(f"\nTranscribed: {text}\n")
                     translation_queue.put(text)  # Send text to translation queue
 
@@ -39,9 +42,10 @@ def transcribe_live(audio_queue, model, translator_model, translation_queue):
         if batch:
             audio_np = np.concatenate([np.frombuffer(chunk, dtype=np.int16) for chunk in batch])
             audio_float = audio_np.astype(np.float32) / 32768.0
-            result = model.transcribe(audio=audio_float, fp16=False, language="ro")
-            text = result.get("text", "").strip()
+            segments, _ = model.transcribe(audio=audio_float, language="ro")
+            text = " ".join(segment.text.strip() for segment in segments)
             if text:
+                # Send the last transcription to the translation queue
                 print(f"\nTranscribed: {text}\n")
                 translation_queue.put(text)
 
@@ -49,7 +53,7 @@ def transcribe_live(audio_queue, model, translator_model, translation_queue):
         print(f"Transcription error: {e}")
 
 
-def record_audio(audio_queue, duration=2.0):
+def record_audio(audio_queue, duration=1.0):
     """Records audio from the microphone and puts it into the queue."""
     RATE = 16000
     CHUNK = int(duration * RATE)
@@ -158,8 +162,8 @@ def main():
     """Main function to orchestrate recording, transcription, translation, and TTS."""
     try:
         # Load models
-        print("Loading Whisper model...")
-        transcription_model = whisper.load_model("large-v3-turbo")
+        print("Loading faster-whisper model...")
+        transcription_model = WhisperModel("small", compute_type="float32")
         print("Loading translation model...")
         translator_model = lms.llm()
 
@@ -185,5 +189,6 @@ def main():
         audio_queue.put(None)  # Signal the transcription thread to stop
         translation_queue.put(None)  # Signal the translation thread to stop
         tts_queue.put(None)  # Signal the TTS thread to stop
+
 
 main()
