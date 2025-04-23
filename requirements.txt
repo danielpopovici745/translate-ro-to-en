@@ -4,3 +4,4 @@ queue
 numpy
 lmstudio
 pyttsx3
+pyqt5

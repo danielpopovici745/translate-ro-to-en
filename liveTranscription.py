@@ -8,21 +8,23 @@ import os
 import pygame
 from concurrent.futures import ThreadPoolExecutor
 from google.cloud import texttospeech
+import threading
+import queue
 
 
-def is_silent(audio_chunk, threshold=40):
+def is_silent(audio_chunk, threshold=43):
     """Determines if the audio chunk is silent based on its energy."""
     audio_np = np.frombuffer(audio_chunk, dtype=np.int16)
     energy = np.sqrt(np.mean(audio_np**2))
     return energy < threshold
 
 
-def transcribe_live(audio_queue, model, translator_model, translation_queue):
+def transcribe_live(audio_queue, model, translator_model, translation_queue, stop_event=None):
     """Transcribes audio chunks from the queue using Whisper and sends text to the translation queue."""
     try:
         batch = []
         batch_size = 5  # Number of chunks to batch process
-        while True:
+        while not stop_event.is_set():  # Check stop_event
             data = audio_queue.get()
             if data is None:  # Signal to stop transcription
                 break
@@ -60,24 +62,35 @@ def transcribe_live(audio_queue, model, translator_model, translation_queue):
         print(f"Transcription error: {e}")
 
 
-def record_audio(audio_queue, duration=2.0):
+def record_audio(audio_queue, duration=2.0, stop_event=None, input_device=None):
     """Records audio from the microphone and puts it into the queue."""
     RATE = 16000
     CHUNK = int(duration * RATE)
 
     try:
         p = pyaudio.PyAudio()
-        stream = p.open(format=pyaudio.paInt16, channels=1, rate=RATE, input=True)
+
+        # Find the index of the selected input device
+        input_device_index = None
+        for i in range(p.get_device_count()):
+            device_info = p.get_device_info_by_index(i)
+            if device_info["name"] == input_device:
+                input_device_index = i
+                break
+
+        if input_device_index is None:
+            raise ValueError(f"Input device '{input_device}' not found.")
+
+        stream = p.open(format=pyaudio.paInt16, channels=1, rate=RATE, input=True, input_device_index=input_device_index)
 
         print("Recording...")
 
-        while True:
+        while not stop_event.is_set():  # Check stop_event
             data = stream.read(CHUNK, exception_on_overflow=False)
             audio_queue.put(data)
     except Exception as e:
         print(f"Recording error: {e}")
     finally:
-        print("Stopping Recording")
         if 'stream' in locals():
             stream.stop_stream()
             stream.close()
@@ -97,9 +110,9 @@ def translate(text, model):
     return translated_text
 
 
-def translation_worker(translation_queue, translator_model, tts_queue):
+def translation_worker(translation_queue, translator_model, tts_queue, stop_event=None):
     """Worker function to translate text asynchronously and send it to the TTS queue."""
-    while True:
+    while not stop_event.is_set():
         text = translation_queue.get()
         if text is None:  # Signal to stop translation
             break
@@ -112,11 +125,11 @@ def translation_worker(translation_queue, translator_model, tts_queue):
             print(f"Translation error: {e}")
 
 
-def tts_worker(tts_queue):
+def tts_worker(tts_queue, stop_event=None, output_device=None):
     """Worker function for TTS to process translations asynchronously using Google Cloud Text-to-Speech."""
     client = texttospeech.TextToSpeechClient()
 
-    while True:
+    while not stop_event.is_set():
         text = tts_queue.get()
         if text is None:  # Signal to stop TTS
             break
@@ -146,8 +159,12 @@ def tts_worker(tts_queue):
             with open(temp_audio_file, "wb") as out:
                 out.write(response.audio_content)
 
-            # Play the audio using pygame
-            pygame.mixer.init()
+            # Initialize pygame mixer with the selected output device
+            if output_device:
+                pygame.mixer.init(devicename=output_device)
+            else:
+                pygame.mixer.init()  # Use the default output device if none is specified
+
             pygame.mixer.music.load(temp_audio_file)
             pygame.mixer.music.play()
 
@@ -165,7 +182,7 @@ def tts_worker(tts_queue):
             print(f"Error in TTS: {e}")
 
 
-def main():
+def main(stop_event=None, input_device=None, output_device=None):
     """Main function to orchestrate recording, transcription, translation, and TTS."""
     try:
         # Load models
@@ -181,13 +198,14 @@ def main():
 
         # Use ThreadPoolExecutor to manage threads
         with ThreadPoolExecutor(max_workers=4) as executor:
-            executor.submit(record_audio, audio_queue)
-            executor.submit(transcribe_live, audio_queue, transcription_model, translator_model, translation_queue)
-            executor.submit(translation_worker, translation_queue, translator_model, tts_queue)
-            executor.submit(tts_worker, tts_queue)
+            executor.submit(record_audio, audio_queue, stop_event=stop_event, input_device=input_device)
+            executor.submit(transcribe_live, audio_queue, transcription_model, translator_model, translation_queue, stop_event=stop_event)
+            executor.submit(translation_worker, translation_queue, translator_model, tts_queue, stop_event=stop_event)
+            executor.submit(tts_worker, tts_queue, stop_event=stop_event, output_device=output_device)
 
+            print(f"Using output device: {output_device}")
             print("Press Ctrl+C to stop.")
-            while True:
+            while not (stop_event and stop_event.is_set()):  # Check the stop event
                 time.sleep(1)
     except KeyboardInterrupt:
         print("\nInterrupted by user. Exiting...")
@@ -198,4 +216,5 @@ def main():
         tts_queue.put(None)  # Signal the TTS thread to stop
 
 
-main()
+if __name__ == "__main__":
+    main()
