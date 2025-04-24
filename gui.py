@@ -4,7 +4,7 @@ import pyaudio
 import threading
 from liveTranscription import main  # Import the transcription logic
 
-class TranscriptionThread(QThread):
+class transcriptionThread(QThread):
     """Thread to run the transcription logic."""
     transcription_finished = pyqtSignal()
 
@@ -27,7 +27,7 @@ class TranscriptionThread(QThread):
 
 # This is the main GUI class
 # It creates a window with input and output device selectors and start/stop buttons.
-class AudioApp(QMainWindow):
+class audioApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("translateRo2En")
@@ -151,7 +151,7 @@ class AudioApp(QMainWindow):
         selected_output_device = self.output_selector.currentData()
 
         # Start the transcription thread and pass the selected devices
-        self.transcription_thread = TranscriptionThread(selected_input_device, selected_output_device)
+        self.transcription_thread = transcriptionThread(selected_input_device, selected_output_device)
         self.transcription_thread.transcription_finished.connect(self.cleanup_thread)
         self.transcription_thread.start()
 
