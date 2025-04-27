@@ -2,5 +2,4 @@ pyaudio
 openai-whisper
 numpy
 lmstudio
-pyttsx3
 pyqt5
