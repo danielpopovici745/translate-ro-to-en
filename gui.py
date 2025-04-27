@@ -2,35 +2,39 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QPushButton,
 from PyQt5.QtCore import QThread, pyqtSignal
 import pyaudio
 import threading
-from liveTranscription import main  # Import the transcription logic
+from liveTranscription import main 
+#  Imports the main function from liveTranscription.py, which then runs the threads for tts worker, translation_worker, and transcribe_live
 
 class transcriptionThread(QThread):
-    """Thread to run the transcription logic."""
+    #Thread to run the transcription logic.
     transcription_finished = pyqtSignal()
 
-    def __init__(self, input_device, output_device):
-        super().__init__()
-        self.input_device = input_device
-        self.output_device = output_device
+    def __init__(self, input_device, output_device): # Initialize the thread with input and output devices
+        super().__init__() # Call the parent constructor (QThread)
+        self.input_device = input_device # Sets the input device
+        self.output_device = output_device # Sets the output device
         self.stop_event = threading.Event()  # Create a stop event
 
-    def run(self):
+    def run(self): # when transcriptionThread.run is called, this function is executed
         try:
+            # Calls main function from liveTranscription.py with input_device, output_device, and stop_event
             main(stop_event=self.stop_event, input_device=self.input_device, output_device=self.output_device)
         except Exception as e:
+            # if any error occurs this will print the event to console.
             print(f"Error in transcription thread: {e}")
         finally:
+            # Ensure the thread exits gracefully, if there is an error.
             self.transcription_finished.emit()
 
     def stop(self):
         self.stop_event.set()  # Signal the stop event
 
-# This is the main GUI class
-# It creates a window with input and output device selectors and start/stop buttons.
+
+# main GUI class for the app, inherits from QMainWindow
 class audioApp(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("translateRo2En")
+    def __init__(self): # Initialize the GUI app
+        super().__init__() # Call the parent constructor (QMainWindow)
+        self.setWindowTitle ("translateRo2En") # Set the title of the window
         self.setGeometry(100, 100, 400, 200) # Set the initial size of the window
         self.setFixedSize(400, 200)  # Prevent resizing by setting a fixed size
 
@@ -45,16 +49,16 @@ class audioApp(QMainWindow):
 
         # Output device selector
         self.output_label = QLabel("Select Output Device:")
-        layout.addWidget(self.output_label)
-        self.output_selector = QComboBox()
-        layout.addWidget(self.output_selector)
-
+        layout.addWidget(self.output_label) # Add label for output device selector
+        self.output_selector = QComboBox() # Create a combo box for output device selection
+        layout.addWidget(self.output_selector) # Add the combo box to the layout
+        
         # Start/Stop buttons
-        self.start_button = QPushButton("Start Transcription") # Create a button to start transcription
+        self.start_button = QPushButton("Start Translating") # Create a button to start transcription
         self.start_button.clicked.connect(self.start_transcription) # Connect the button to the start_transcription method
         layout.addWidget(self.start_button) # Add the start button to the layout
 
-        self.stop_button = QPushButton("Stop Transcription") # Create a button to stop transcription
+        self.stop_button = QPushButton("Stop Translating") # Create a button to stop transcription
         self.stop_button.clicked.connect(self.stop_transcription) # Connect the button to the stop_transcription method
         self.stop_button.setEnabled(False) # Initially disable the stop button
         layout.addWidget(self.stop_button) # Add the stop button to the layout
