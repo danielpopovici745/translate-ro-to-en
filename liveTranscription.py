@@ -1,7 +1,8 @@
+import subprocess
 import pyaudio
-import whisper
 import queue
 import time
+import wave
 import numpy as np
 import lmstudio as lms
 import os
@@ -9,21 +10,55 @@ import pygame
 from concurrent.futures import ThreadPoolExecutor
 from google.cloud import texttospeech
 import threading
-import queue
 
 
-def is_silent(audio_chunk, threshold=43):
+def is_silent(audio_chunk, threshold=40):
     """Determines if the audio chunk is silent based on its energy."""
     audio_np = np.frombuffer(audio_chunk, dtype=np.int16)
     energy = np.sqrt(np.mean(audio_np**2))
     return energy < threshold
 
+def save_audio_to_wav(audio_data, filename, samplerate=44100, channels=1):
+    """Saves raw audio data to a .wav file."""
+    with wave.open(filename, 'wb') as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)  # 16-bit audio
+        wf.setframerate(samplerate)
+        wf.writeframes(audio_data)
 
-def transcribe_live(audio_queue, model, translator_model, translation_queue, stop_event=None):
-    """Transcribes audio chunks from the queue using Whisper and sends text to the translation queue."""
+
+def transcribe_with_whisper_cli(filename, language="ro"):
+    """Transcribes a .wav file using whisper-cli."""
+    try:
+        # Call whisper-cli and capture stdout
+        result = subprocess.run(
+            ['./whisper.cpp/build/bin/whisper-cli', filename, '--language', language, '--model', './whisper.cpp/models/ggml-large-v3-turbo.bin', '-nt'],
+            capture_output=True,
+            text=True
+        )
+
+        # Check for errors
+        if result.returncode != 0:
+            print(f"Whisper CLI stderr: {result.stderr}")
+            raise RuntimeError(f"Whisper CLI error: {result.stderr}")
+
+        # Use stdout for transcription
+        transcription = result.stdout
+
+        return transcription
+    except Exception as e:
+        print(f"Error during transcription: {e}")
+        return ""
+
+
+def transcribe_live(audio_queue, translator_model, translation_queue, stop_event=None):
+    """Transcribes audio chunks from the queue using whisper-cli and sends text to the translation queue."""
     try:
         batch = []
         batch_size = 5  # Number of chunks to batch process
+        samplerate = 44100
+        channels = 1
+
         while not stop_event.is_set():  # Check stop_event
             data = audio_queue.get()
             if data is None:  # Signal to stop transcription
@@ -36,35 +71,43 @@ def transcribe_live(audio_queue, model, translator_model, translation_queue, sto
             batch.append(data)
             if len(batch) >= batch_size:
                 # Process the batch
-                audio_np = np.concatenate([np.frombuffer(chunk, dtype=np.int16) for chunk in batch])
-                audio_float = audio_np.astype(np.float32) / 32768.0
+                audio_bytes = b''.join(batch)
+                temp_audio_file = "temp_audio.wav"
 
-                # Transcribe audio
-                result = model.transcribe(audio=audio_float, fp16=False, language="ro")
-                text = result.get("text", "").strip()
+                # Save audio to a .wav file
+                save_audio_to_wav(audio_bytes, temp_audio_file, samplerate=samplerate, channels=channels)
+
+                # Transcribe audio using whisper-cli
+                start_time = time.time()
+                text = transcribe_with_whisper_cli(temp_audio_file, language="ro")
+                print(f"Transcription time: {time.time() - start_time:.2f} seconds")
                 if text:
                     print(f"\nTranscribed: {text}\n")
                     translation_queue.put(text)  # Send text to translation queue
 
+                # Remove the temporary .wav file
+                os.remove(temp_audio_file)
                 batch = []  # Clear the batch
 
         # Process any remaining audio in the batch
         if batch:
-            audio_np = np.concatenate([np.frombuffer(chunk, dtype=np.int16) for chunk in batch])
-            audio_float = audio_np.astype(np.float32) / 32768.0
-            result = model.transcribe(audio=audio_float, fp16=False, language="ro")
-            text = result.get("text", "").strip()
+            audio_bytes = b''.join(batch)
+            temp_audio_file = "temp_audio.wav"
+
+            save_audio_to_wav(audio_bytes, temp_audio_file, samplerate=samplerate, channels=channels)
+            text = transcribe_with_whisper_cli(temp_audio_file, language="ro")
             if text:
                 print(f"\nTranscribed: {text}\n")
                 translation_queue.put(text)
 
+            os.remove(temp_audio_file)
     except Exception as e:
         print(f"Transcription error: {e}")
 
 
-def record_audio(audio_queue, duration=2.0, stop_event=None, input_device=None):
+def record_audio(audio_queue, duration=1, stop_event=None, input_device=None):
     """Records audio from the microphone and puts it into the queue."""
-    RATE = 16000
+    RATE = 44100
     CHUNK = int(duration * RATE)
 
     try:
@@ -104,7 +147,7 @@ def translate(text, model):
     """Translates Romanian text to English using the lmstudio model."""
     translated_text = ""
     for fragment in model.respond_stream(
-        "You are a professional translator. Translate the following Romanian text to English accurately and naturally. Don't say anything more. If there is nothing to translate or you can't translate don't say anything." + text
+        " Translate the following Romanian text to English naturally. Do not add any more of your own context." + text
     ):
         translated_text += fragment.content
     return translated_text
@@ -155,7 +198,7 @@ def tts_worker(tts_queue, stop_event=None, output_device=None):
             )
 
             # Save the audio to a file
-            temp_audio_file = os.path.join(os.getcwd(), "temp_audio.wav")
+            temp_audio_file = os.path.join(os.getcwd(), "temp_audio_tts.wav")
             with open(temp_audio_file, "wb") as out:
                 out.write(response.audio_content)
 
@@ -186,8 +229,6 @@ def main(stop_event=None, input_device=None, output_device=None):
     """Main function to orchestrate recording, transcription, translation, and TTS."""
     try:
         # Load models
-        print("Loading Whisper model...")
-        transcription_model = whisper.load_model("large-v3-turbo")
         print("Loading translation model...")
         translator_model = lms.llm()
 
@@ -199,12 +240,11 @@ def main(stop_event=None, input_device=None, output_device=None):
         # Use ThreadPoolExecutor to manage threads
         with ThreadPoolExecutor(max_workers=4) as executor:
             executor.submit(record_audio, audio_queue, stop_event=stop_event, input_device=input_device)
-            executor.submit(transcribe_live, audio_queue, transcription_model, translator_model, translation_queue, stop_event=stop_event)
+            executor.submit(transcribe_live, audio_queue, translator_model, translation_queue, stop_event=stop_event)
             executor.submit(translation_worker, translation_queue, translator_model, tts_queue, stop_event=stop_event)
             executor.submit(tts_worker, tts_queue, stop_event=stop_event, output_device=output_device)
 
             print(f"Using output device: {output_device}")
-            print("Press Ctrl+C to stop.")
             while not (stop_event and stop_event.is_set()):  # Check the stop event
                 time.sleep(1)
     except KeyboardInterrupt:
